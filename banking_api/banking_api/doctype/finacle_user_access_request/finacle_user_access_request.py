@@ -133,3 +133,80 @@ class FinacleUserAccessRequest(Document):
 					pass
 			frappe.log_error(frappe.get_traceback(), f"Finacle {action} failed for {self.user_id}")
 			frappe.throw(f"Failed to execute {action} in Finacle: {str(e)}")
+
+
+def process_deputation_daily_scheduler():
+	"""
+	Daily scheduler job:
+	1. 3-day advance alert for expiring deputations
+	2. Auto-expire and auto-revert deputations whose to_date has passed
+	3. Reminder for pending checker requests older than 3 days
+	"""
+	from frappe.utils import add_days, getdate
+
+	current_date = getdate(today())
+	reminder_date = add_days(current_date, 3)
+
+	# 1. 3-day advance expiry reminder
+	expiring_soon = frappe.get_all(
+		"Finacle User Access Request",
+		filters={
+			"request_type": "Deputation",
+			"status": "Active",
+			"to_date": reminder_date,
+			"is_reversed": 0
+		},
+		fields=["name", "user_id", "employee_name", "depute_sol_id", "current_sol_id", "to_date", "maker_id", "checker_id"]
+	)
+
+	for req in expiring_soon:
+		subject = f"Deputation Ending Soon (3 Days): {req.employee_name or req.user_id}"
+		message = f"Deputation for user {req.user_id} at branch {req.depute_sol_id} will expire on {req.to_date}. Base SOL: {req.current_sol_id}."
+		recipients = list(filter(None, [req.maker_id, req.checker_id]))
+		if recipients:
+			for user in recipients:
+				frappe.publish_realtime("msgprint", message, user=user)
+
+	# 2. Auto-expiry and auto-revert
+	expired_requests = frappe.get_all(
+		"Finacle User Access Request",
+		filters={
+			"request_type": "Deputation",
+			"status": "Active",
+			"to_date": ["<", current_date],
+			"is_reversed": 0
+		},
+		fields=["name"]
+	)
+
+	for r in expired_requests:
+		try:
+			doc = frappe.get_doc("Finacle User Access Request", r.name)
+			doc.status = "Expired"
+			doc.is_reversed = 1
+			doc.reversal_date = now_datetime()
+			doc.remarks = (doc.remarks or "") + "\nAuto-expired and reverted by daily scheduler."
+			doc.execute_reversal_in_finacle()
+			doc.save(ignore_permissions=True)
+		except Exception as e:
+			frappe.log_error(frappe.get_traceback(), f"Auto-revert failed for deputation {r.name}")
+
+	# 3. Reminder for pending approvals >= 3 days old
+	pending_cutoff = add_days(current_date, -3)
+	pending_requests = frappe.get_all(
+		"Finacle User Access Request",
+		filters={
+			"status": "Pending Checker Approval",
+			"creation": ["<=", pending_cutoff]
+		},
+		fields=["name", "employee_name", "user_id", "checker_id", "creation"]
+	)
+
+	for p in pending_requests:
+		if p.checker_id:
+			frappe.publish_realtime(
+				"msgprint",
+				f"Reminder: Deputation request {p.name} for {p.employee_name or p.user_id} is pending your approval for 3+ days.",
+				user=p.checker_id
+			)
+
