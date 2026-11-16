@@ -100,18 +100,21 @@ class FinacleUserAccessRequest(Document):
 
 		conn = None
 		try:
-			if frappe.db.exists("Database Configuration", {"database": "Finacle Production"}):
-				conn = get_db_connection(database="Finacle Production", timeout=15)
-			elif frappe.db.exists("Database Configuration", {"name": "Finacle Production"}):
-				conn = get_db_connection(name="Finacle Production", timeout=15)
-			elif frappe.db.exists("Database Configuration", {"database": "Finacle Production DR"}):
-				conn = get_db_connection(database="Finacle Production DR", timeout=15)
-			else:
+			# Look up active Database Configuration dynamically
+			db_config = frappe.db.get_value(
+				"Database Configuration",
+				{"database_name": ["in", ["Finacle", "postgres", "finfadm"]]},
+				"name"
+			) or frappe.db.get_value("Database Configuration", {}, "name")
+
+			if not db_config:
 				frappe.log_error(
-					f"Database Configuration for Finacle not found. Skipped {action} for {self.user_id}",
+					f"No Database Configuration found. Skipped {action} for {self.user_id}",
 					f"Finacle {action} DB Config Missing"
 				)
 				return
+
+			conn = get_db_connection(name=db_config, timeout=15)
 
 			cur = conn.cursor()
 			# Update SOL in employee get table
