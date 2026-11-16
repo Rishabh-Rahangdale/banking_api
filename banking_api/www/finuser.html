@@ -164,6 +164,19 @@ body.dr main, body.dr #users-view{margin-right:440px}
 .btn-update{background:var(--acc);border:none;color:#fff;border-radius:8px;padding:7px 18px;font-weight:700;font-size:13px;cursor:pointer;transition:background .15s}
 .btn-update:hover{background:#0d6560}
 .btn-update:disabled{background:var(--inactive);cursor:not-allowed}
+.depute-badge-btn{border:none;background:var(--accbg);color:var(--acc);font-size:11px;font-weight:700;padding:4px 8px;border-radius:6px;cursor:pointer;margin-left:auto;transition:all .15s}
+.depute-badge-btn:hover{background:var(--acc);color:#fff}
+#depute-modal{position:fixed;inset:0;background:rgba(15,23,42,.5);backdrop-filter:blur(3px);z-index:100;display:none;align-items:center;justify-content:center;padding:16px}
+#depute-modal.on{display:flex}
+.dm-box{background:var(--surf);width:min(440px,100%);border-radius:16px;box-shadow:0 20px 40px rgba(0,0,0,.18);border:1px solid var(--line);overflow:hidden}
+.dm-head{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}
+.dm-head h3{margin:0;font-size:15px;color:var(--ink)}
+.dm-body{padding:16px 18px;display:flex;flex-direction:column;gap:12px}
+.dm-field{display:flex;flex-direction:column;gap:4px}
+.dm-field label{font-size:11px;font-weight:700;text-transform:uppercase;color:var(--mute)}
+.dm-input{padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit;font-size:13px;outline:none}
+.dm-input:focus{border-color:var(--acc)}
+.dm-foot{padding:12px 18px;background:var(--bg);border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px}
 </style>
 </head>
 <body>
@@ -280,11 +293,65 @@ body.dr main, body.dr #users-view{margin-right:440px}
   </div>
 </div>
 
+<!-- Deputation Dialog Modal -->
+<div id="depute-modal" role="dialog" aria-modal="true">
+  <div class="dm-box">
+    <div class="dm-head">
+      <h3>Finacle User Deputation</h3>
+      <button class="um-close" id="dm-close" aria-label="Close">✕</button>
+    </div>
+    <div class="dm-body">
+      <div class="dm-field">
+        <label>Finacle User / Name</label>
+        <input type="text" id="dm-user-display" class="dm-input" readonly style="background:var(--bg);font-weight:600;">
+        <input type="hidden" id="dm-user-id">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div class="dm-field">
+          <label>Current SOL ID</label>
+          <input type="text" id="dm-current-sol" class="dm-input" readonly style="background:var(--bg);font-weight:600;">
+        </div>
+        <div class="dm-field">
+          <label>Depute SOL ID *</label>
+          <input type="text" id="dm-depute-sol" class="dm-input" placeholder="e.g. 1002" required>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div class="dm-field">
+          <label>From Date *</label>
+          <input type="date" id="dm-from-date" class="dm-input" required>
+        </div>
+        <div class="dm-field">
+          <label>To Date *</label>
+          <input type="date" id="dm-to-date" class="dm-input" required>
+        </div>
+      </div>
+      <div class="dm-field">
+        <label>Remarks / Purpose</label>
+        <textarea id="dm-remarks" class="dm-input" rows="2" placeholder="Reason for deputation..."></textarea>
+      </div>
+    </div>
+    <div class="dm-foot">
+      <button class="btn-cancel" id="dm-cancel">Cancel</button>
+      <button class="btn-update" id="dm-submit">Submit to Checker</button>
+    </div>
+  </div>
+</div>
+
+<script id="finuser-init-data" type="application/json">
+{
+  "branches": {{ (branches or []) | tojson }},
+  "all_users": {{ (all_users or []) | tojson }},
+  "total_records": {{ total_query_records or 1054 }},
+  "can_disable_user": {{ (can_disable_user or false) | tojson }}
+}
+</script>
 <script>
-const BRANCHES = {{ (branches or []) | tojson }};
-const ALL_USERS = {{ (all_users or []) | tojson }};
-const TOTAL_RECORDS = {{ total_query_records or 1054 }};
-const CAN_DISABLE_USER = {{ (can_disable_user or false) | tojson }};
+const _INIT_DATA = JSON.parse(document.getElementById("finuser-init-data").textContent);
+const BRANCHES = _INIT_DATA.branches;
+const ALL_USERS = _INIT_DATA.all_users;
+const TOTAL_RECORDS = _INIT_DATA.total_records;
+const CAN_DISABLE_USER = _INIT_DATA.can_disable_user;
 const USERS_CACHE = {};
 let RESIGNED_CACHE = null;
 let currentTab = "branches"; // 'branches' | 'users'
@@ -708,7 +775,10 @@ function render() {
           <div class="m">${escapeHtml(u.designation || 'N/A')}</div>
           <div class="m" style="font-size:11px;color:var(--mute);">Work Class: <b>${escapeHtml(u.work_class || 'N/A')}</b></div>
         </div>
-        <span class="rl">${escapeHtml(u.role_id || 'USER')}</span>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+          <span class="rl">${escapeHtml(u.role_id || 'USER')}</span>
+          <button class="depute-badge-btn" onclick="event.stopPropagation(); openDeputeModal('${escapeHtml(u.user_id)}', '${escapeHtml(u.name)}', '${escapeHtml(cur)}')">Depute</button>
+        </div>
       </div>
     `;
   }).join("") : '<div class="none">No active Finacle users found matching criteria.</div>';
@@ -1245,11 +1315,92 @@ usersView.addEventListener("click", e => {
   openUserModal(tr.dataset.uid, tr.dataset.role, tr);
 });
 
+// Deputation Modal Handlers
+const deputeModal = $("depute-modal");
+function openDeputeModal(userId, userName, currentSol) {
+  $("dm-user-id").value = userId;
+  $("dm-user-display").value = `${userName} (${userId})`;
+  $("dm-current-sol").value = currentSol || cur || "";
+  $("dm-depute-sol").value = "";
+  $("dm-from-date").value = new Date().toISOString().split("T")[0];
+  $("dm-to-date").value = "";
+  $("dm-remarks").value = "";
+  deputeModal.classList.add("on");
+}
+
+function closeDeputeModal() {
+  deputeModal.classList.remove("on");
+}
+
+if ($("dm-close")) $("dm-close").onclick = closeDeputeModal;
+if ($("dm-cancel")) $("dm-cancel").onclick = closeDeputeModal;
+
+if ($("dm-submit")) {
+  $("dm-submit").onclick = async () => {
+    const userId = $("dm-user-id").value;
+    const currentSol = $("dm-current-sol").value;
+    const deputeSol = $("dm-depute-sol").value.trim();
+    const fromDate = $("dm-from-date").value;
+    const toDate = $("dm-to-date").value;
+    const remarks = $("dm-remarks").value.trim();
+
+    if (!deputeSol || !fromDate || !toDate) {
+      alert("Please fill all required fields: Depute SOL ID, From Date and To Date");
+      return;
+    }
+    if (deputeSol === currentSol) {
+      alert("Depute SOL ID cannot be identical to Current SOL ID");
+      return;
+    }
+    if (toDate < fromDate) {
+      alert("To Date cannot be before From Date");
+      return;
+    }
+
+    const btn = $("dm-submit");
+    btn.disabled = true;
+    btn.textContent = "Submitting...";
+
+    try {
+      const res = await fetch("/api/method/banking_api.banking_api.www.finuser.create_deputation_request", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Frappe-CSRF-Token": (window.frappe && frappe.csrf_token) || ""
+        },
+        body: JSON.stringify({
+          user_id: userId,
+          current_sol_id: currentSol,
+          depute_sol_id: deputeSol,
+          from_date: fromDate,
+          to_date: toDate,
+          remarks: remarks
+        })
+      });
+      const data = await res.json();
+      const result = data.message || {};
+      if (result.status === "success") {
+        if (window.frappe && frappe.show_alert) frappe.show_alert({ message: result.message, indicator: "green" });
+        else alert(result.message);
+        closeDeputeModal();
+      } else {
+        alert(result.message || "Failed to submit deputation request");
+      }
+    } catch (err) {
+      alert("Submission error: " + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Submit to Checker";
+    }
+  };
+}
+
 addEventListener("keydown", e => {
   if (e.key === "Escape") {
     closeBranchDrawer();
     closeResignedDrawer();
     closeUserModal();
+    closeDeputeModal();
     confirmModal.classList.remove("on");
   }
 });
