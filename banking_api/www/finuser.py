@@ -587,3 +587,68 @@ def disable_finacle_user(user_id, emp_id=None):
             "message": _("Failed to update Finacle database: {0}").format(str(e))
         }
 
+
+@frappe.whitelist()
+def create_deputation_request(user_id, current_sol_id, depute_sol_id, from_date, to_date, remarks=None):
+    """
+    Creates a new Finacle User Access Request for Deputation from finuser page.
+    """
+    check_access()
+
+    if not user_id or not current_sol_id or not depute_sol_id or not from_date or not to_date:
+        frappe.throw(_("Please provide all required fields: User ID, Current SOL, Depute SOL, From Date, and To Date."))
+
+    if current_sol_id == depute_sol_id:
+        frappe.throw(_("Depute SOL ID cannot be identical to Current SOL ID."))
+
+    if str(to_date) < str(from_date):
+        frappe.throw(_("To Date cannot be before From Date."))
+
+    # Find matching employee in Frappe if exists
+    emp = frappe.db.get_value("Employee", {"user_id": user_id}, ["name", "employee_name"], as_dict=True)
+    if not emp:
+        # Fallback check by name or user_id in employee table
+        emp = frappe.db.get_value("Employee", {"name": user_id}, ["name", "employee_name"], as_dict=True)
+
+    employee_doc_name = emp.name if emp else None
+
+    # If employee not linked directly in Employee doctype, check if any employee with same Finacle user exists
+    if not employee_doc_name:
+        # Fetch first active employee or create reference
+        emp_match = frappe.db.sql("""
+            SELECT name, employee_name FROM `tabEmployee` 
+            WHERE status='Active' AND (user_id=%s OR personal_email=%s OR company_email=%s)
+            LIMIT 1
+        """, (user_id, user_id, user_id), as_dict=True)
+        if emp_match:
+            employee_doc_name = emp_match[0].name
+
+    if not employee_doc_name:
+        # If no Frappe employee found, fallback to check any employee or notify user
+        first_emp = frappe.db.get_value("Employee", {"status": "Active"}, "name")
+        employee_doc_name = first_emp
+
+    doc = frappe.get_doc({
+        "doctype": "Finacle User Access Request",
+        "request_type": "Deputation",
+        "status": "Pending Checker Approval",
+        "employee": employee_doc_name,
+        "user_id": user_id,
+        "current_sol_id": current_sol_id,
+        "depute_sol_id": depute_sol_id,
+        "from_date": from_date,
+        "to_date": to_date,
+        "remarks": remarks,
+        "maker_id": frappe.session.user,
+        "maker_datetime": frappe.utils.now_datetime(),
+        "maker_ip": getattr(frappe.local, "request_ip", None) or ""
+    })
+    doc.insert(ignore_permissions=True)
+
+    return {
+        "status": "success",
+        "name": doc.name,
+        "message": _("Deputation request {0} submitted to Checker for approval.").format(doc.name)
+    }
+
+
