@@ -274,7 +274,7 @@ def get_branch_users(sol_id):
         "total": len(users_list),
     }
 
-
+# resign employee: Fetches all resigned employees from ERPNext and matches with Finacle Production DR users to identify those still active in Finacle.
 @frappe.whitelist()
 def get_resigned_employees():
     check_resigned_access()
@@ -395,7 +395,7 @@ def get_resigned_employees():
         "active_in_finacle_count": len(resigned_list),
     }
 
-
+# get_missing_in_finacle_employees: Fetches all Active employees from ERPNext and identifies those missing in Finacle DR "get" table.
 @frappe.whitelist()
 def get_missing_in_finacle_employees():
     check_resigned_access()
@@ -486,6 +486,7 @@ def get_missing_in_finacle_employees():
 
 
 
+# update_user_role: Updates user role in Finacle database table finfadm.urm_user_role_tbl.
 @frappe.whitelist()
 def update_user_role(user_id, old_role, new_role):
     check_role_update_access()
@@ -512,11 +513,13 @@ def update_user_role(user_id, old_role, new_role):
 
         cur = conn.cursor()
         if old_role:
+            # role id updation query with old_role in WHERE clause to ensure correct update
             cur.execute(
                 "UPDATE finfadm.urm_user_role_tbl SET role_id = %s WHERE user_id = %s AND role_id = %s",
                 (new_role, user_id, old_role),
             )
         else:
+            # role id updation query without old_role in WHERE clause (for cases where old_role is unknown)
             cur.execute(
                 "UPDATE finfadm.urm_user_role_tbl SET role_id = %s WHERE user_id = %s",
                 (new_role, user_id),
@@ -536,6 +539,7 @@ def update_user_role(user_id, old_role, new_role):
         }
 
 
+# disable_finacle_user: Disables user login in Finacle database table finfadm.user_creds_tbl.
 @frappe.whitelist()
 def disable_finacle_user(user_id, emp_id=None):
     """
@@ -565,6 +569,7 @@ def disable_finacle_user(user_id, emp_id=None):
             conn = get_finacle_dr_connection()
 
         cur = conn.cursor()
+        # deactivation query: disables user in Finacle
         query = """
             UPDATE finfadm.user_creds_tbl
             SET
@@ -588,6 +593,7 @@ def disable_finacle_user(user_id, emp_id=None):
         }
 
 
+# create_deputation_request: BM creates temporary deputation request in Employee finuser_items child table.
 @frappe.whitelist()
 def create_deputation_request(user_id, current_sol_id, depute_sol_id, from_date, to_date, remarks=None):
     """
@@ -629,6 +635,7 @@ def create_deputation_request(user_id, current_sol_id, depute_sol_id, from_date,
     }
 
 
+# approve_finuser_item: BOM approves pending deputation, validates maker!=checker, and updates SOL in Finacle.
 @frappe.whitelist()
 def approve_finuser_item(employee, row_name, remarks=None):
     """
@@ -665,6 +672,7 @@ def approve_finuser_item(employee, row_name, remarks=None):
     return {"status": "success", "message": _("Request approved successfully.")}
 
 
+# reject_finuser_item: BOM rejects pending deputation with mandatory remarks, ensuring maker!=checker.
 @frappe.whitelist()
 def reject_finuser_item(employee, row_name, remarks):
     """
@@ -695,6 +703,7 @@ def reject_finuser_item(employee, row_name, remarks):
     return {"status": "success", "message": _("Request rejected.")}
 
 
+# reverse_deputation_item: Manually reverts active deputation early and restores base SOL ID in Finacle.
 @frappe.whitelist()
 def reverse_deputation_item(employee, row_name, remarks=None):
     """
@@ -725,6 +734,7 @@ def reverse_deputation_item(employee, row_name, remarks=None):
     return {"status": "success", "message": _("Deputation reversed and base SOL restored.")}
 
 
+# _get_employee_by_user_id: Helper to find Employee document name from Finacle user ID.
 def _get_employee_by_user_id(user_id):
     """Finds Frappe Employee doc name mapped to user_id."""
     emp = frappe.db.get_value("Employee", {"user_id": user_id}, "name")
@@ -736,6 +746,7 @@ def _get_employee_by_user_id(user_id):
     return frappe.db.get_value("Employee", {"status": "Active"}, "name")
 
 
+# _update_finacle_sol: Executes DBA query UPDATE tbaadm.upr SET sol_id = %s WHERE user_id = %s AND sol_id = %s in Finacle.
 def _update_finacle_sol(user_id, target_sol, current_sol=None, action="Update"):
     """
     Executes SOL update query in Finacle DB as per DBA recommendation:
@@ -745,7 +756,7 @@ def _update_finacle_sol(user_id, target_sol, current_sol=None, action="Update"):
         return
 
     from banking_api.banking_api.doctype.database_configuration.database_configuration import get_db_connection
-
+    # dabase_name = "Finacle Production"
     db_config = frappe.db.get_value(
         "Database Configuration",
         {"database_name": ["in", ["Finacle", "postgres", "finfadm"]]},
@@ -760,7 +771,8 @@ def _update_finacle_sol(user_id, target_sol, current_sol=None, action="Update"):
     try:
         conn = get_db_connection(name=db_config, timeout=15)
         cur = conn.cursor()
-
+        # If current_sol is provided, use it in WHERE clause; else update based on user_id only
+        # deputation / SOL update query (DBA approved): updates user sol_id in Finacle (tbaadm.upr)
         if current_sol:
             query = "UPDATE tbaadm.upr SET sol_id = %s WHERE user_id = %s AND sol_id = %s;"
             cur.execute(query, (str(target_sol).strip(), str(user_id).strip(), str(current_sol).strip()))
@@ -781,6 +793,7 @@ def _update_finacle_sol(user_id, target_sol, current_sol=None, action="Update"):
         frappe.throw(_("Failed to update SOL in Finacle: {0}").format(str(e)))
 
 
+# process_deputation_daily_scheduler: Daily cron to send 3-day advance alerts and auto-revert expired deputations back to base SOL.
 def process_deputation_daily_scheduler():
     """
     Daily Cron Scheduler:
@@ -792,7 +805,7 @@ def process_deputation_daily_scheduler():
     current_date = getdate(today())
     reminder_date = add_days(current_date, 3)
 
-    # 1. 3-day advance reminder
+    # 1. 3-day advance reminder, fetch all active deputations expiring in 3 days and notify maker/checker via real-time message
     expiring_items = frappe.db.sql("""
         SELECT item.name as row_name, item.parent as employee, emp.employee_name, emp.user_id,
                item.depute_sol_id, item.current_sol_id, item.to_date, item.maker_id, item.checker_id
@@ -810,7 +823,7 @@ def process_deputation_daily_scheduler():
         for u in recipients:
             frappe.publish_realtime("msgprint", msg, user=u)
 
-    # 2. Auto-expiry & auto-revert
+    # 2. Auto-expiry & auto-revert, reversal of expired deputations back to base SOL
     expired_items = frappe.db.sql("""
         SELECT item.name as row_name, item.parent as employee, emp.user_id, item.current_sol_id, item.depute_sol_id
         FROM `tabFinUser Items` item
