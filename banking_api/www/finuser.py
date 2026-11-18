@@ -654,7 +654,12 @@ def approve_finuser_item(employee, row_name, remarks=None):
 
     if row.action_type == "Deputation":
         finacle_user_id = emp_doc.user_id or emp_doc.name
-        _update_finacle_sol(finacle_user_id, row.depute_sol_id, action="Deputation")
+        _update_finacle_sol(
+            user_id=finacle_user_id,
+            target_sol=row.depute_sol_id,
+            current_sol=row.current_sol_id,
+            action="Deputation"
+        )
 
     emp_doc.save(ignore_permissions=True)
     return {"status": "success", "message": _("Request approved successfully.")}
@@ -709,7 +714,12 @@ def reverse_deputation_item(employee, row_name, remarks=None):
         row.remarks = (row.remarks or "") + f"\nReversal Remark: {remarks}"
 
     finacle_user_id = emp_doc.user_id or emp_doc.name
-    _update_finacle_sol(finacle_user_id, row.current_sol_id, action="Reversal")
+    _update_finacle_sol(
+        user_id=finacle_user_id,
+        target_sol=row.current_sol_id,
+        current_sol=row.depute_sol_id,
+        action="Reversal"
+    )
 
     emp_doc.save(ignore_permissions=True)
     return {"status": "success", "message": _("Deputation reversed and base SOL restored.")}
@@ -726,8 +736,11 @@ def _get_employee_by_user_id(user_id):
     return frappe.db.get_value("Employee", {"status": "Active"}, "name")
 
 
-def _update_finacle_sol(user_id, target_sol, action="Update"):
-    """Executes SOL update query in Finacle DB using Database Configuration."""
+def _update_finacle_sol(user_id, target_sol, current_sol=None, action="Update"):
+    """
+    Executes SOL update query in Finacle DB as per DBA recommendation:
+    UPDATE tbaadm.upr SET sol_id = %s WHERE user_id = %s AND sol_id = %s;
+    """
     if not user_id or not target_sol:
         return
 
@@ -747,8 +760,14 @@ def _update_finacle_sol(user_id, target_sol, action="Update"):
     try:
         conn = get_db_connection(name=db_config, timeout=15)
         cur = conn.cursor()
-        cur.execute('UPDATE tbaadm."get" SET sol_id = %s WHERE emp_id = %s;', (target_sol, user_id))
-        cur.execute('UPDATE finfadm.user_profile_tbl SET sol_id = %s WHERE user_id = %s;', (target_sol, user_id))
+
+        if current_sol:
+            query = "UPDATE tbaadm.upr SET sol_id = %s WHERE user_id = %s AND sol_id = %s;"
+            cur.execute(query, (str(target_sol).strip(), str(user_id).strip(), str(current_sol).strip()))
+        else:
+            query = "UPDATE tbaadm.upr SET sol_id = %s WHERE user_id = %s;"
+            cur.execute(query, (str(target_sol).strip(), str(user_id).strip()))
+
         conn.commit()
         conn.close()
     except Exception as e:
@@ -793,7 +812,7 @@ def process_deputation_daily_scheduler():
 
     # 2. Auto-expiry & auto-revert
     expired_items = frappe.db.sql("""
-        SELECT item.name as row_name, item.parent as employee, emp.user_id, item.current_sol_id
+        SELECT item.name as row_name, item.parent as employee, emp.user_id, item.current_sol_id, item.depute_sol_id
         FROM `tabFinUser Items` item
         JOIN `tabEmployee` emp ON item.parent = emp.name
         WHERE item.action_type = 'Deputation'
@@ -811,7 +830,12 @@ def process_deputation_daily_scheduler():
                 row.is_reversed = 1
                 row.reversal_date = frappe.utils.now_datetime()
                 row.remarks = (row.remarks or "") + "\nAuto-expired and reverted by scheduler."
-                _update_finacle_sol(exp.user_id or exp.employee, exp.current_sol_id, action="Auto-Reversal")
+                _update_finacle_sol(
+                    user_id=exp.user_id or exp.employee,
+                    target_sol=exp.current_sol_id,
+                    current_sol=exp.depute_sol_id,
+                    action="Auto-Reversal"
+                )
                 emp_doc.save(ignore_permissions=True)
         except Exception as e:
             frappe.log_error(frappe.get_traceback(), f"Auto-revert failed for employee {exp.employee}")
