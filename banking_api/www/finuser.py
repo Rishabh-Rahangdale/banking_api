@@ -196,18 +196,17 @@ def get_context(context):
         FROM `tabSahayog Branch`
         WHERE IFNULL(sol_id, '') != ''
     """
-    params = []
     if allowed_sol_ids is not None:
         if not allowed_sol_ids:
             # BM has no mapped branch
             branch_query += " AND 1=0 "
+            branches = frappe.db.sql(branch_query, as_dict=True)
         else:
-            placeholders = ", ".join(["%s"] * len(allowed_sol_ids))
-            branch_query += f" AND sol_id IN ({placeholders}) "
-            params.extend(allowed_sol_ids)
-
-    branch_query += " ORDER BY CAST(sol_id AS UNSIGNED) ASC, sol_id ASC "
-    branches = frappe.db.sql(branch_query, tuple(params) if params else None, as_dict=True)
+            branch_query += " AND sol_id IN %(sols)s ORDER BY CAST(sol_id AS UNSIGNED) ASC, sol_id ASC "
+            branches = frappe.db.sql(branch_query, {"sols": tuple(allowed_sol_ids)}, as_dict=True)
+    else:
+        branch_query += " ORDER BY CAST(sol_id AS UNSIGNED) ASC, sol_id ASC "
+        branches = frappe.db.sql(branch_query, as_dict=True)
 
     # 2. Execute query on Finacle DR including NULL date users as active
     fin_counts = {}
@@ -991,17 +990,15 @@ def get_pending_approvals():
         WHERE item.action_type = 'Deputation'
           AND item.status = 'Pending Checker Approval'
     """
-    params = []
     if allowed_sols is not None:
         if not allowed_sols:
             return {"requests": [], "total": 0}
-        placeholders = ", ".join(["%s"] * len(allowed_sols))
-        query += f" AND (item.current_sol_id IN ({placeholders}) OR item.depute_sol_id IN ({placeholders})) "
-        params.extend(allowed_sols)
-        params.extend(allowed_sols)
-
-    query += " ORDER BY item.creation DESC "
-    rows = frappe.db.sql(query, tuple(params) if params else None, as_dict=True)
+        query += " AND (item.current_sol_id IN %(sols)s OR item.depute_sol_id IN %(sols)s) "
+        query += " ORDER BY item.creation DESC "
+        rows = frappe.db.sql(query, {"sols": tuple(allowed_sols)}, as_dict=True)
+    else:
+        query += " ORDER BY item.creation DESC "
+        rows = frappe.db.sql(query, as_dict=True)
 
     return {
         "requests": rows,
