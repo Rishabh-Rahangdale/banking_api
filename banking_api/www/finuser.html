@@ -1315,8 +1315,12 @@ usersView.addEventListener("click", e => {
   openUserModal(tr.dataset.uid, tr.dataset.role, tr);
 });
 
+// ==============================================================================
 // Deputation Modal Handlers
+// ==============================================================================
 const deputeModal = $("depute-modal");
+
+// openDeputeModal: Opens deputation modal and pre-fills user details and current SOL
 function openDeputeModal(userId, userName, currentSol) {
   $("dm-user-id").value = userId;
   $("dm-user-display").value = `${userName} (${userId})`;
@@ -1328,13 +1332,16 @@ function openDeputeModal(userId, userName, currentSol) {
   deputeModal.classList.add("on");
 }
 
+// closeDeputeModal: Closes deputation modal dialog
 function closeDeputeModal() {
   deputeModal.classList.remove("on");
 }
 
+// Attach close click listeners
 if ($("dm-close")) $("dm-close").onclick = closeDeputeModal;
 if ($("dm-cancel")) $("dm-cancel").onclick = closeDeputeModal;
 
+// dm-submit click: Validates input fields and submits deputation request to checker
 if ($("dm-submit")) {
   $("dm-submit").onclick = async () => {
     const userId = $("dm-user-id").value;
@@ -1344,14 +1351,17 @@ if ($("dm-submit")) {
     const toDate = $("dm-to-date").value;
     const remarks = $("dm-remarks").value.trim();
 
+    // Validation 1: All required fields must be filled
     if (!deputeSol || !fromDate || !toDate) {
       alert("Please fill all required fields: Depute SOL ID, From Date and To Date");
       return;
     }
+    // Validation 2: Depute SOL cannot be same as Current SOL
     if (deputeSol === currentSol) {
       alert("Depute SOL ID cannot be identical to Current SOL ID");
       return;
     }
+    // Validation 3: To Date cannot be earlier than From Date
     if (toDate < fromDate) {
       alert("To Date cannot be before From Date");
       return;
@@ -1362,6 +1372,7 @@ if ($("dm-submit")) {
     btn.textContent = "Submitting...";
 
     try {
+      // API call to create deputation request in Employee finuser_items child table
       const res = await fetch("/api/method/banking_api.banking_api.www.finuser.create_deputation_request", {
         method: "POST",
         headers: {
