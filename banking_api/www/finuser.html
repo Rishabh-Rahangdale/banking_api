@@ -197,6 +197,11 @@ body.dr main, body.dr #users-view{margin-right:440px}
   <span class="dot red"></span>Resigned Employees <span id="resigned-cnt" class="badge-cnt" style="background:#fee2e2;color:#b91c1c;margin-left:4px;">0</span>
 </button>
 {% endif %}
+{% if can_approve_requests %}
+<button id="btn-pending" class="f" style="background:#fef3c7;color:#92400e;border-color:#f59e0b;">
+  Pending Approvals <span id="pending-cnt" class="badge-cnt" style="background:#fde68a;color:#78350f;margin-left:4px;">0</span>
+</button>
+{% endif %}
 <button id="exp" class="f">Export</button>
 </header>
 <main id="grid"></main>
@@ -255,6 +260,20 @@ body.dr main, body.dr #users-view{margin-right:440px}
     </div>
   </div>
 </div>
+{% endif %}
+
+<!-- Pending Checker Approvals Drawer -->
+{% if can_approve_requests %}
+<div id="ov-pending" class="drawer" role="complementary" aria-label="Pending Approvals"><div class="pop">
+<div class="ph">
+  <div style="flex:1;min-width:0;">
+    <h2 style="color:#b45309;"><span class="dot" style="background:#f59e0b;"></span>Pending Deputation Approvals</h2>
+    <p id="pending-sub">Review and verify deputation requests</p>
+  </div>
+  <button id="x-pending" aria-label="Close">✕</button>
+</div>
+<div id="pending-list" class="drawer-list" style="margin-top:12px;"></div>
+</div></div>
 {% endif %}
 
 <!-- User Detail / Role Change Modal -->
@@ -343,7 +362,9 @@ body.dr main, body.dr #users-view{margin-right:440px}
   "branches": {{ (branches or []) | tojson }},
   "all_users": {{ (all_users or []) | tojson }},
   "total_records": {{ total_query_records or 1054 }},
-  "can_disable_user": {{ (can_disable_user or false) | tojson }}
+  "can_disable_user": {{ (can_disable_user or false) | tojson }},
+  "can_create_deputation": {{ (can_create_deputation or false) | tojson }},
+  "can_approve_requests": {{ (can_approve_requests or false) | tojson }}
 }
 </script>
 <script>
@@ -352,6 +373,8 @@ const BRANCHES = _INIT_DATA.branches;
 const ALL_USERS = _INIT_DATA.all_users;
 const TOTAL_RECORDS = _INIT_DATA.total_records;
 const CAN_DISABLE_USER = _INIT_DATA.can_disable_user;
+const CAN_CREATE_DEPUTATION = _INIT_DATA.can_create_deputation;
+const CAN_APPROVE_REQUESTS = _INIT_DATA.can_approve_requests;
 const USERS_CACHE = {};
 let RESIGNED_CACHE = null;
 let currentTab = "branches"; // 'branches' | 'users'
@@ -364,7 +387,7 @@ BRANCHES.forEach(b => {
 });
 
 const $ = id => document.getElementById(id);
-const grid = $("grid"), usersView = $("users-view"), ov = $("ov"), ovResigned = $("ov-resigned"), ovMissing = $("ov-missing");
+const grid = $("grid"), usersView = $("users-view"), ov = $("ov"), ovResigned = $("ov-resigned"), ovMissing = $("ov-missing"), ovPending = $("ov-pending");
 let cur = null, role = "ALL";
 let sortK = "code", grouped = true;
 let utRole = "ALL", utWorkClass = "ALL", utZone = "ALL", utSidebarTab = "roles";
@@ -777,7 +800,7 @@ function render() {
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
           <span class="rl">${escapeHtml(u.role_id || 'USER')}</span>
-          <button class="depute-badge-btn" onclick="event.stopPropagation(); openDeputeModal('${escapeHtml(u.user_id)}', '${escapeHtml(u.name)}', '${escapeHtml(cur)}')">Depute</button>
+          ${CAN_CREATE_DEPUTATION ? `<button class="depute-badge-btn" onclick="event.stopPropagation(); openDeputeModal('${escapeHtml(u.user_id)}', '${escapeHtml(u.name)}', '${escapeHtml(cur)}')">Depute</button>` : ''}
         </div>
       </div>
     `;
@@ -1406,10 +1429,141 @@ if ($("dm-submit")) {
   };
 }
 
+// ==============================================================================
+// Pending Approvals Drawer Logic (for Checker / BOM)
+// ==============================================================================
+let PENDING_CACHE = null;
+
+function updatePendingBadge(count) {
+  const badge = $("pending-cnt");
+  if (badge) {
+    badge.textContent = count != null ? count : 0;
+    badge.style.display = "inline-block";
+  }
+}
+
+async function fetchPendingApprovals() {
+  try {
+    const res = await fetch("/api/method/banking_api.banking_api.www.finuser.get_pending_approvals");
+    const data = await res.json();
+    PENDING_CACHE = data.message || { requests: [], total: 0 };
+    updatePendingBadge(PENDING_CACHE.total);
+    return PENDING_CACHE;
+  } catch (err) {
+    return { requests: [], total: 0 };
+  }
+}
+
+function renderPendingList() {
+  const container = $("pending-list");
+  if (!container) return;
+  const list = (PENDING_CACHE && PENDING_CACHE.requests) || [];
+
+  if (!list.length) {
+    container.innerHTML = '<div class="none">No pending deputation requests found.</div>';
+    return;
+  }
+
+  container.innerHTML = list.map(item => `
+    <div class="u" style="flex-direction:column;align-items:stretch;gap:8px;padding:12px 14px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-weight:700;font-size:14px;color:var(--ink);">${escapeHtml(item.employee_name || item.user_id)}</span>
+        <span style="font-size:11px;background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:6px;font-weight:700;">Pending Approval</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;background:var(--bg);padding:8px 10px;border-radius:8px;">
+        <div>Current SOL: <b>${escapeHtml(item.current_sol_id)}</b></div>
+        <div>Depute SOL: <b style="color:var(--acc);">${escapeHtml(item.depute_sol_id)}</b></div>
+        <div>From: <b>${escapeHtml(item.from_date)}</b></div>
+        <div>To: <b>${escapeHtml(item.to_date)}</b></div>
+      </div>
+      ${item.remarks ? `<div style="font-size:12px;color:var(--mute);">Remarks: ${escapeHtml(item.remarks)}</div>` : ''}
+      <div style="font-size:11px;color:var(--mute);">Maker: <b>${escapeHtml(item.maker_id)}</b></div>
+      <div style="display:flex;gap:8px;margin-top:4px;justify-content:flex-end;">
+        <button class="btn-cancel" style="padding:5px 12px;font-size:12px;" onclick="rejectPendingItem('${escapeHtml(item.employee)}', '${escapeHtml(item.row_name)}')">Reject</button>
+        <button class="btn-update" style="padding:5px 14px;font-size:12px;" onclick="approvePendingItem('${escapeHtml(item.employee)}', '${escapeHtml(item.row_name)}')">Approve</button>
+      </div>
+    </div>
+  `).join("");
+}
+
+async function approvePendingItem(employee, rowName) {
+  if (!confirm("Are you sure you want to approve this deputation? Finacle SOL ID will be updated immediately.")) return;
+  try {
+    const res = await fetch("/api/method/banking_api.banking_api.www.finuser.approve_finuser_item", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Frappe-CSRF-Token": (window.frappe && frappe.csrf_token) || "" },
+      body: JSON.stringify({ employee: employee, row_name: rowName })
+    });
+    const data = await res.json();
+    const result = data.message || {};
+    if (result.status === "success") {
+      if (window.frappe && frappe.show_alert) frappe.show_alert({ message: result.message, indicator: "green" });
+      else alert(result.message);
+      await fetchPendingApprovals();
+      renderPendingList();
+    } else {
+      alert(result.message || "Approval failed");
+    }
+  } catch (e) {
+    alert("Approval error: " + e.message);
+  }
+}
+
+async function rejectPendingItem(employee, rowName) {
+  const remarks = prompt("Please enter rejection remarks (mandatory):");
+  if (!remarks || !remarks.trim()) {
+    alert("Rejection remarks are required.");
+    return;
+  }
+  try {
+    const res = await fetch("/api/method/banking_api.banking_api.www.finuser.reject_finuser_item", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Frappe-CSRF-Token": (window.frappe && frappe.csrf_token) || "" },
+      body: JSON.stringify({ employee: employee, row_name: rowName, remarks: remarks.trim() })
+    });
+    const data = await res.json();
+    const result = data.message || {};
+    if (result.status === "success") {
+      if (window.frappe && frappe.show_alert) frappe.show_alert({ message: result.message, indicator: "green" });
+      else alert(result.message);
+      await fetchPendingApprovals();
+      renderPendingList();
+    } else {
+      alert(result.message || "Rejection failed");
+    }
+  } catch (e) {
+    alert("Rejection error: " + e.message);
+  }
+}
+
+function closePendingDrawer() {
+  if (ovPending) ovPending.classList.remove("on");
+  if ((!ov || !ov.classList.contains("on")) && (!ovResigned || !ovResigned.classList.contains("on")) && (!ovMissing || !ovMissing.classList.contains("on"))) {
+    document.body.classList.remove("dr");
+  }
+}
+
+if ($("x-pending")) $("x-pending").onclick = closePendingDrawer;
+
+if ($("btn-pending")) {
+  fetchPendingApprovals();
+  $("btn-pending").onclick = async () => {
+    closeBranchDrawer();
+    if (typeof closeResignedDrawer === "function") closeResignedDrawer();
+    if (typeof closeMissingDrawer === "function") closeMissingDrawer();
+    ovPending.classList.add("on");
+    document.body.classList.add("dr");
+    await fetchPendingApprovals();
+    renderPendingList();
+  };
+}
+
 addEventListener("keydown", e => {
   if (e.key === "Escape") {
     closeBranchDrawer();
     closeResignedDrawer();
+    closeMissingDrawer();
+    closePendingDrawer();
     closeUserModal();
     closeDeputeModal();
     confirmModal.classList.remove("on");
