@@ -35,10 +35,39 @@ ORDER BY
     u.role_id;"""
 
 
-ALLOWED_ROLES = {"Operations Support Executive", "CBS Support Executive", "System Manager", "Administrator"}
+ALLOWED_ROLES = {
+    "Operations Support Executive",
+    "CBS Support Executive",
+    "System Manager",
+    "Administrator",
+    "Branch Manager",
+    "Branch Operations Manager",
+    "FinUser Maker",
+    "FinUser Checker"
+}
+
+ALL_BRANCH_ROLES = {
+    "Operations Support Executive",
+    "CBS Support Executive",
+    "System Manager",
+    "Administrator"
+}
+
+MAKER_ROLES = {
+    "Branch Manager",
+    "FinUser Maker",
+    "System Manager",
+    "Administrator"
+}
+
+CHECKER_ROLES = {
+    "Branch Operations Manager",
+    "FinUser Checker",
+    "System Manager",
+    "Administrator"
+}
+
 RESIGNED_ACCESS_ROLES = {"CBS Support Executive", "System Manager", "Administrator"}
-
-
 ROLE_UPDATE_ACCESS_ROLES = {"CBS Support Executive", "System Manager", "Administrator"}
 
 
@@ -49,6 +78,60 @@ def check_access():
     user_roles = set(frappe.get_roles(frappe.session.user))
     if frappe.session.user != "Administrator" and not (user_roles & ALLOWED_ROLES):
         frappe.throw(_("Access Denied: You do not have permission to access Finacle User Management."), frappe.PermissionError)
+
+
+def can_approve_requests():
+    """Checks if current logged in user has Checker permissions."""
+    if frappe.session.user == "Administrator":
+        return True
+    user_roles = set(frappe.get_roles(frappe.session.user))
+    return bool(user_roles & CHECKER_ROLES)
+
+
+def can_create_deputation():
+    """Checks if current logged in user has Maker permissions."""
+    if frappe.session.user == "Administrator":
+        return True
+    user_roles = set(frappe.get_roles(frappe.session.user))
+    return bool(user_roles & MAKER_ROLES)
+
+
+def get_user_allowed_sol_ids():
+    """
+    Returns list of SOL IDs allowed for the logged in user.
+    Admin and Head Office roles get None (meaning ALL branches allowed).
+    Branch Managers and local users get only their mapped SOL ID(s).
+    """
+    if frappe.session.user == "Administrator":
+        return None
+
+    user_roles = set(frappe.get_roles(frappe.session.user))
+    if user_roles & ALL_BRANCH_ROLES:
+        return None
+
+    # Fetch SOL ID mapped to user from Employee master
+    emp = frappe.db.get_value(
+        "Employee",
+        {"user_id": frappe.session.user, "status": "Active"},
+        ["name", "sol_id", "branch", "sahayog_branch"],
+        as_dict=True
+    )
+
+    allowed_sols = set()
+    if emp:
+        if emp.sol_id:
+            allowed_sols.add(str(emp.sol_id).strip())
+        if emp.branch:
+            # Check if branch name matches sol_id or code
+            sol = frappe.db.get_value("Sahayog Branch", {"name": emp.branch}, "sol_id") or frappe.db.get_value("Sahayog Branch", {"branch": emp.branch}, "sol_id")
+            if sol:
+                allowed_sols.add(str(sol).strip())
+        if emp.sahayog_branch:
+            sol = frappe.db.get_value("Sahayog Branch", {"name": emp.sahayog_branch}, "sol_id")
+            if sol:
+                allowed_sols.add(str(sol).strip())
+
+    return list(allowed_sols) if allowed_sols else []
 
 
 def check_role_update_access():
@@ -94,12 +177,16 @@ def get_context(context):
     context.can_manage_resigned = can_manage_resigned()
     context.can_update_role = can_update_role()
     context.can_disable_user = can_disable_user()
+    context.can_create_deputation = can_create_deputation()
+    context.can_approve_requests = can_approve_requests()
 
     context.is_guest = False
 
-    # 1. Fetch Sahayog Branches from MariaDB
-    branches = frappe.db.sql(
-        """
+    # Get allowed SOL IDs for logged in user (BM gets only their branch, Admin gets None = all)
+    allowed_sol_ids = get_user_allowed_sol_ids()
+
+    # 1. Fetch Sahayog Branches from MariaDB (filtered by user's authorized branch if restricted)
+    branch_query = """
         SELECT 
             sol_id AS code,
             branch AS name,
@@ -108,10 +195,19 @@ def get_context(context):
             IFNULL(district, '') AS district
         FROM `tabSahayog Branch`
         WHERE IFNULL(sol_id, '') != ''
-        ORDER BY CAST(sol_id AS UNSIGNED) ASC, sol_id ASC
-        """,
-        as_dict=True,
-    )
+    """
+    params = []
+    if allowed_sol_ids is not None:
+        if not allowed_sol_ids:
+            # BM has no mapped branch
+            branch_query += " AND 1=0 "
+        else:
+            placeholders = ", ".join(["%s"] * len(allowed_sol_ids))
+            branch_query += f" AND sol_id IN ({placeholders}) "
+            params.extend(allowed_sol_ids)
+
+    branch_query += " ORDER BY CAST(sol_id AS UNSIGNED) ASC, sol_id ASC "
+    branches = frappe.db.sql(branch_query, tuple(params) if params else None, as_dict=True)
 
     # 2. Execute query on Finacle DR including NULL date users as active
     fin_counts = {}
@@ -601,6 +697,13 @@ def create_deputation_request(user_id, current_sol_id, depute_sol_id, from_date,
     """
     check_access()
 
+    if not can_create_deputation():
+        frappe.throw(_("Permission Denied: Only Branch Manager or authorized FinUser Maker can initiate deputation."), frappe.PermissionError)
+
+    allowed_sols = get_user_allowed_sol_ids()
+    if allowed_sols is not None and str(current_sol_id).strip() not in allowed_sols:
+        frappe.throw(_("Permission Denied: You can only depute users from your authorized branch ({0}).").format(", ".join(allowed_sols)), frappe.PermissionError)
+
     if not user_id or not current_sol_id or not depute_sol_id or not from_date or not to_date:
         frappe.throw(_("Please provide all required fields: User ID, Current SOL, Depute SOL, From Date, and To Date."))
 
@@ -643,6 +746,9 @@ def approve_finuser_item(employee, row_name, remarks=None):
     """
     check_access()
 
+    if not can_approve_requests():
+        frappe.throw(_("Permission Denied: Only Branch Operations Manager (BOM) or authorized FinUser Checker can approve requests."), frappe.PermissionError)
+
     emp_doc = frappe.get_doc("Employee", employee)
     row = next((r for r in emp_doc.finuser_items if r.name == row_name), None)
     if not row:
@@ -679,6 +785,9 @@ def reject_finuser_item(employee, row_name, remarks):
     Rejects a pending FinUser item row in Employee child table.
     """
     check_access()
+
+    if not can_approve_requests():
+        frappe.throw(_("Permission Denied: Only Branch Operations Manager (BOM) or authorized FinUser Checker can reject requests."), frappe.PermissionError)
 
     if not remarks:
         frappe.throw(_("Remarks are required to reject."))
@@ -852,6 +961,53 @@ def process_deputation_daily_scheduler():
                 emp_doc.save(ignore_permissions=True)
         except Exception as e:
             frappe.log_error(frappe.get_traceback(), f"Auto-revert failed for employee {exp.employee}")
+
+
+# get_pending_approvals: Fetches pending deputation requests for Checker review on same page
+@frappe.whitelist()
+def get_pending_approvals():
+    check_access()
+    if not can_approve_requests():
+        return {"requests": [], "total": 0}
+
+    allowed_sols = get_user_allowed_sol_ids()
+
+    query = """
+        SELECT 
+            item.name as row_name,
+            item.parent as employee,
+            emp.employee_name,
+            emp.user_id,
+            item.current_sol_id,
+            item.depute_sol_id,
+            item.from_date,
+            item.to_date,
+            item.remarks,
+            item.maker_id,
+            item.maker_datetime,
+            item.creation
+        FROM `tabFinUser Items` item
+        JOIN `tabEmployee` emp ON item.parent = emp.name
+        WHERE item.action_type = 'Deputation'
+          AND item.status = 'Pending Checker Approval'
+    """
+    params = []
+    if allowed_sols is not None:
+        if not allowed_sols:
+            return {"requests": [], "total": 0}
+        placeholders = ", ".join(["%s"] * len(allowed_sols))
+        query += f" AND (item.current_sol_id IN ({placeholders}) OR item.depute_sol_id IN ({placeholders})) "
+        params.extend(allowed_sols)
+        params.extend(allowed_sols)
+
+    query += " ORDER BY item.creation DESC "
+    rows = frappe.db.sql(query, tuple(params) if params else None, as_dict=True)
+
+    return {
+        "requests": rows,
+        "total": len(rows)
+    }
+
 
 
 
